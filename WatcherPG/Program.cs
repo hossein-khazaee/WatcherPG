@@ -2,6 +2,13 @@
 using Npgsql.Replication.PgOutput;
 using Npgsql.Replication.PgOutput.Messages;
 using NpgsqlTypes;
+using System.Collections.Generic;
+using System.Data;
+using System.Diagnostics.Metrics;
+using System.Security.Cryptography;
+using System.Security.Principal;
+using System.Text;
+using static System.Net.Mime.MediaTypeNames;
 
 class Program
 {
@@ -73,3 +80,157 @@ class Program
         return NpgsqlLogSequenceNumber.Parse(text);
     }
 }
+
+
+public static class DataHashHelper
+{
+    static string key = "PowerKEYAddHere";
+    private static readonly byte[] Key = new byte[32];
+    private static readonly byte[] IV = new byte[16];
+
+
+    public static string EncryptPhoneNum(this string phoneNum)
+    {
+        if (string.IsNullOrEmpty(phoneNum))
+            return null;
+
+        Array.Copy(Encoding.UTF8.GetBytes(key), Key, 32);
+        Array.Copy(Encoding.UTF8.GetBytes(key), IV, 16);
+        using (Aes aes = Aes.Create())
+        {
+            aes.Key = Key;
+            aes.IV = IV;
+
+            using (ICryptoTransform encryptor = aes.CreateEncryptor(aes.Key, aes.IV))
+            {
+                using (MemoryStream ms = new MemoryStream())
+                {
+                    using (CryptoStream cs = new CryptoStream(ms, encryptor, CryptoStreamMode.Write))
+                    {
+                        using (StreamWriter sw = new StreamWriter(cs))
+                        {
+                            sw.Write(phoneNum);
+                        }
+                        return Convert.ToBase64String(ms.ToArray());
+                    }
+                }
+            }
+        }
+    }
+    public static string DecryptPhoneNum(this string phoneNum)
+    {
+        if (string.IsNullOrEmpty(phoneNum))
+            return null;
+
+        using (Aes aes = Aes.Create())
+        {
+            aes.Key = Key;
+            aes.IV = IV;
+
+            using (ICryptoTransform decryptor = aes.CreateDecryptor(aes.Key, aes.IV))
+            {
+                using (MemoryStream ms = new MemoryStream(Convert.FromBase64String(phoneNum)))
+                {
+                    using (CryptoStream cs = new CryptoStream(ms, decryptor, CryptoStreamMode.Read))
+                    {
+                        using (StreamReader sr = new StreamReader(cs))
+                        {
+                            return sr.ReadToEnd();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+/*
+ *  
+--فعال‌سازی full identity برای CDC کامل
+ALTER TABLE "user" REPLICA IDENTITY FULL;
+ALTER TABLE "role" REPLICA IDENTITY FULL;
+
+--ساخت publication مخصوص Core
+CREATE PUBLICATION core_pub FOR TABLE "user", "role";
+
+--ساخت replication slot برای CDC
+SELECT pg_create_logical_replication_slot('core_slot', 'pgoutput');
+
+--بررسی فعال بودن CDC
+SELECT * FROM pg_publication;
+SELECT* FROM pg_replication_slots;
+
+
+
+--------------------------------------------------------------------------
+--تنظیم for safety
+ALTER SYSTEM SET wal_level = 'logical';
+ALTER SYSTEM SET max_replication_slots = 10;
+ALTER SYSTEM SET max_wal_senders = 10;
+
+--برای جداول حساس
+ALTER TABLE "user" REPLICA IDENTITY FULL;
+ALTER TABLE role REPLICA IDENTITY FULL;
+
+--ساخت Publication محدود
+CREATE PUBLICATION core_pub FOR TABLE "user", role;
+
+--ساخت Slot مخصوص CDC
+SELECT pg_create_logical_replication_slot('core_slot', 'wal2json');
+
+
+ -- تنظیم for safety
+ALTER SYSTEM SET wal_level = 'logical';
+ALTER SYSTEM SET max_replication_slots = 10;
+ALTER SYSTEM SET max_wal_senders = 10;
+
+-- برای جداول حساس
+ALTER TABLE "user" REPLICA IDENTITY FULL;
+ALTER TABLE role REPLICA IDENTITY FULL;
+
+-- ساخت Publication محدود
+CREATE PUBLICATION core_pub FOR TABLE "user", role;
+
+-- ساخت Slot مخصوص CDC
+SELECT pg_create_logical_replication_slot('core_slot', 'wal2json');
+
+
+
+
+ -- فعال‌سازی full identity برای CDC کامل
+ALTER TABLE "user" REPLICA IDENTITY FULL;
+ALTER TABLE "role" REPLICA IDENTITY FULL;
+
+-- ساخت publication مخصوص Core
+CREATE PUBLICATION core_pub FOR TABLE "user", "role";
+
+-- ساخت replication slot برای CDC
+SELECT pg_create_logical_replication_slot('core_slot', 'pgoutput');
+
+-- بررسی فعال بودن CDC
+SELECT * FROM pg_publication;
+SELECT * FROM pg_replication_slots;
+
+
+
+--------------------------------------------------------------------------
+-- تنظیم for safety
+ALTER SYSTEM SET wal_level = 'logical';
+ALTER SYSTEM SET max_replication_slots = 10;
+ALTER SYSTEM SET max_wal_senders = 10;
+
+-- برای جداول حساس
+ALTER TABLE "user" REPLICA IDENTITY FULL;
+ALTER TABLE role REPLICA IDENTITY FULL;
+
+-- ساخت Publication محدود
+CREATE PUBLICATION core_pub FOR TABLE "user", role;
+
+-- ساخت Slot مخصوص CDC
+SELECT pg_create_logical_replication_slot('core_slot', 'wal2json');
+
+
+docker exec -it mongo1 mongosh --eval "rs.initiate({_id:'rs0',members:[{_id:0,host:'172.18.0.1:27017'}]})"
+
+ */
